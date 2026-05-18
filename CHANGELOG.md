@@ -10,10 +10,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- WiFi Direct support (wireless mode)
+- mDNS auto-discovery for wireless mode
 - Audio streaming
 - Multi-touch gestures
 - Stylus/pen support
+
+---
+
+<a id="0.9.1"></a>
+## [0.9.1] - 2026-05-18
+
+Hotfix for a "cursor trail" / ghost-cursor artifact visible on shaky WiFi (e.g. iPhone hotspot) under 0.9.0. Android-only — Mac host is unchanged.
+
+### Fixed
+- **Cursor trail / ghost cursors on WiFi jitter.** When a brief WiFi burst saturated MediaCodec's input pool on Android, the decoder kept receiving P-frames whose reference state had quietly diverged from the encoder's. The mismatch painted ghost cursors at old positions until the next scheduled keyframe arrived (~1 s later). The client now **force-requests a fresh keyframe** the moment the input pool exhausts, bypassing the 1 s / 500 ms / 500 ms throttle chain that was holding recovery back — the reference rebuilds in ~150 ms instead. The pipeline keeps feeding through the recovery so the cursor stays live (a brief trail is visible while the keyframe is in flight, then it clears). A new 200 ms throttle on forced requests prevents the host being keyframe-flooded under sustained congestion.
+
+### Installation
+- **macOS**: 0.9.0 DMG works — no Mac changes in this release. Otherwise install `SideScreen-0.9.1-mac-universal.dmg` and run `sudo xattr -cr /Applications/SideScreen.app` if Gatekeeper complains.
+- **Android**: Install `SideScreen-0.9.1-android.apk` (enable "Unknown sources" if needed).
+
+---
+
+<a id="0.9.0"></a>
+## [0.9.0] - 2026-05-18
+
+Stream resilience pass — faster recovery after backgrounding/reconnect, less lag pile-up on rapidly changing content, and two latent bugs squashed in the wire layer. Contributed by @luisdavim (#16, relates to #13).
+
+### Added
+- **Keyframe tracking and recovery**. The Android client now parses per-frame metadata from the Mac host (keyframe flag + capture timestamp), waits for a fresh keyframe before feeding the decoder after startup or codec error, and explicitly requests a keyframe from the host on demand. Returning to Side Screen from home / multi-task now recovers in ~50–100 ms instead of staying garbled until the next scheduled keyframe (~1 s). An opt-in handshake message keeps older clients on the legacy frame format so mixed versions still work.
+- **Stale decoder-output drop**. When the decoder's output queue piles up under heavy scenes (fast terminal scroll, large window scroll, etc.), frames whose decoder-pipeline latency exceeds 100 ms are dropped rather than rendered. Cursor and touch feel stay live instead of slowly trailing reality.
+
+### Fixed
+- **Touch thread priority was being set on the wrong thread.** `Executors.newSingleThreadExecutor` runs the thread factory on the caller, so the `Process.setThreadPriority(THREAD_PRIORITY_DISPLAY)` call inside the factory was elevating whichever thread happened to call `connect()` instead of `TouchThread` itself. The priority call now runs from inside the worker, so touch handling actually gets the boost under CPU pressure.
+- **Coalesced messages on the Mac host could silently lose touch/ping events.** The Mac input loop read up to 22 bytes per receive and processed only the first message; when TCP combined a touch frame plus a ping into one segment, the trailing message was dropped. Replaced with a buffered parser that consumes one message at a time and keeps the rest for the next round.
+- **Async diagnostic log writes.** `DiagLog` no longer blocks on file I/O on the calling thread — writes run on a dedicated single-thread executor. Helps on devices where the previous synchronous `appendText` showed up in input latency profiles.
+
+### Notes
+- This release adds three new wire-protocol message types (`6` video-frame-with-metadata, `7` keyframe-request, `8` client-supports-metadata) but keeps the legacy type `0` path. Mixed pairs are safe: a new Android client + old Mac host falls back to legacy frames; a new Mac host + old Android client never sees the new types because the client doesn't advertise capability. Update both sides to get the recovery benefits.
+
+### Installation
+- **macOS**: Open `SideScreen-0.9.0-mac-universal.dmg`, drag SideScreen to Applications. If Gatekeeper says "damaged"/"cannot be opened": `sudo xattr -cr /Applications/SideScreen.app`
+- **Android**: Install `SideScreen-0.9.0-android.apk` (enable "Unknown sources" if needed).
+
+---
+
+<a id="0.8.1"></a>
+## [0.8.1] - 2026-05-12
+
+Small fix on top of the 0.8.0 wireless release. Wireless mode (QR pairing, auto-reconnect, paired-devices management) and everything else from 0.8.0 stay the same — this patch only fixes a UI bug in the Mac Status section.
+
+### Fixed
+- **Info tooltips next to status rows now show their hint text.** Clicking the `ⓘ` icon next to a status row previously opened an empty horizontal bar instead of the explanation. Now it pops up the hint properly (e.g. what "ADB reverse" or "Listening on" actually mean).
+
+### Installation
+- **macOS**: Open `SideScreen-0.8.1-mac-universal.dmg`, drag SideScreen to Applications. If Gatekeeper says "damaged"/"cannot be opened": `sudo xattr -cr /Applications/SideScreen.app`
+- **Android**: APK from 0.8.0 still works — no Android changes in this release. Otherwise install `SideScreen-0.8.1-android.apk` (enable "Unknown sources" if needed).
+
+---
+
+<a id="0.8.0"></a>
+## [0.8.0] - 2026-05-09
+
+Wireless connection mode — Android client can now connect to the Mac host over WiFi LAN via one-time QR pairing, no USB cable required. USB mode unchanged and remains the default.
+
+### Added
+- **Wireless mode** — pair via QR scan, auto-reconnect on every launch, secure by token. Built on the same short-GOP encoder pipeline that landed in 0.7.0, so quality matches USB whenever your WiFi is healthy.
+- **Mode-aware status checklist** — Mac status section now adapts to your connection mode. USB mode tells you when ADB is missing (with the `brew install` command right there). Wireless mode shows your WiFi state and listening address.
+- **Paired devices on Mac** — see every tablet you've paired with, forget devices individually, or rotate the auth token to revoke access for all of them at once.
+
+### Changed
+- Android connection screen now has a top-level **USB / Wireless** segmented switcher. Manual host/port entry stays in the USB tab unchanged.
+- **Default port changed from 8888 to 54321** (8888 collides with HP printers, Splunk, Jupyter, and many dev tools — fresh installs now default to 54321; existing users keep their saved value).
+- Status section rows now have an `info.circle` icon next to each label — hover to see what the row means and how to fix it.
+
+### Notes
+- Wireless adds 10–50 ms of latency depending on WiFi quality. For text/web/video it's not noticeable. For drawing precision or fast-paced gaming, USB still wins.
+- The token authorizing wireless connections is generated on first launch and stored locally — anyone with your Mac's QR can pair, so don't share it broadcast-style. "Reset Token" on Mac revokes all paired devices.
+
+### Installation
+- **macOS**: Open `SideScreen-0.8.0-mac-universal.dmg`, drag SideScreen to Applications. If Gatekeeper says "damaged"/"cannot be opened": `sudo xattr -cr /Applications/SideScreen.app`
+- **Android**: Install `SideScreen-0.8.0-android.apk` (enable "Unknown sources" if needed). Wireless mode requires camera permission to scan the pairing QR.
+- **First wireless pairing**: open Side Screen on Mac → toggle to Wireless tab → scan the displayed QR with the Android app's Wireless tab.
 
 ---
 
